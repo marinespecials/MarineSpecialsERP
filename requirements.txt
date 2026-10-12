@@ -1,0 +1,8 @@
+PySide6>=6.7,<7          # UI, PDF viewer (QtPdf), charts (QtCharts)
+pypdfium2>=4.30,<6       # PDF text/render/split - replaces Poppler
+pytesseract>=0.3.10      # OCR (Tesseract itself is bundled by the release build)
+zxing-cpp>=2.2           # QR codes on Greek e-invoices
+Pillow>=10.1
+qrcode>=7.4
+openpyxl>=3.1
+keyring>=24              # passwords in Windows Credential Manager

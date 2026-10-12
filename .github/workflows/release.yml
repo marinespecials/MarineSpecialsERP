@@ -1,0 +1,90 @@
+# Push a tag like v2.0.1  ->  tests run, the Windows app is built with Tesseract inside,
+# and a GitHub Release is published. Installed apps see it and offer "Install & restart".
+name: Build & Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:        # manual test build (artifact only, no release)
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt pytest
+      - run: python -m pytest -q tests
+
+  build:
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set version from tag
+        shell: pwsh
+        run: |
+          $v = if ($env:GITHUB_REF_TYPE -eq "tag") { "${{ github.ref_name }}".TrimStart("v") } else { "0.0.0" }
+          "# Written by the release build`nVERSION = `"$v`"" | Out-File -Encoding utf8NoBOM erp/_version.py
+          "APP_VERSION=$v" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: Install Python packages
+        run: pip install -r requirements.txt pyinstaller
+
+      - name: Bundle Tesseract (Greek + English only)
+        shell: pwsh
+        run: |
+          choco install tesseract -y --no-progress
+          $src = "C:\Program Files\Tesseract-OCR"
+          robocopy $src build\tesseract /E /XD tessdata /NFL /NDL /NJH /NJS
+          if ($LASTEXITCODE -ge 8) { exit 1 }
+          New-Item -ItemType Directory -Force build\tesseract\tessdata | Out-Null
+          foreach ($lang in "eng", "ell", "osd") {
+            Invoke-WebRequest "https://github.com/tesseract-ocr/tessdata/raw/main/$lang.traineddata" -OutFile "build\tesseract\tessdata\$lang.traineddata"
+          }
+          & build\tesseract\tesseract.exe --list-langs --tessdata-dir build\tesseract\tessdata
+          exit 0
+
+      - name: Build app
+        run: pyinstaller MarineSpecialsERP.spec --noconfirm
+
+      - name: Package zip + checksum
+        shell: pwsh
+        run: |
+          New-Item -ItemType File -Force dist\MarineSpecialsERP\.mserp-install | Out-Null
+          Compress-Archive -Path dist\MarineSpecialsERP -DestinationPath dist\MarineSpecialsERP-win64.zip -Force
+          $hash = (Get-FileHash dist\MarineSpecialsERP-win64.zip -Algorithm SHA256).Hash.ToLower()
+          "$hash  MarineSpecialsERP-win64.zip" | Out-File -Encoding ascii -NoNewline dist\MarineSpecialsERP-win64.zip.sha256
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "C:\Program Files (x86)\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DAppVersion=$env:APP_VERSION" installer\MarineSpecialsERP.iss
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MarineSpecialsERP-${{ env.APP_VERSION }}
+          path: |
+            dist/MarineSpecialsERP-win64.zip
+            dist/MarineSpecialsERP-Setup.exe
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/MarineSpecialsERP-win64.zip
+            dist/MarineSpecialsERP-win64.zip.sha256
+            dist/MarineSpecialsERP-Setup.exe
