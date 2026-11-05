@@ -71,6 +71,9 @@ jobs:
         run: |
           if (-not (Test-Path "C:\Program Files (x86)\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DAppVersion=$env:APP_VERSION" installer\MarineSpecialsERP.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          $hash = (Get-FileHash dist\MarineSpecialsERP-Setup.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  MarineSpecialsERP-Setup.exe" | Out-File -Encoding ascii -NoNewline dist\MarineSpecialsERP-Setup.exe.sha256
 
       - uses: actions/upload-artifact@v4
         with:
@@ -88,3 +91,4 @@ jobs:
             dist/MarineSpecialsERP-win64.zip
             dist/MarineSpecialsERP-win64.zip.sha256
             dist/MarineSpecialsERP-Setup.exe
+            dist/MarineSpecialsERP-Setup.exe.sha256

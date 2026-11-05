@@ -19,6 +19,7 @@ UninstallDisplayIcon={app}\MarineSpecialsERP.exe
 Compression=lzma2
 SolidCompression=yes
 CloseApplications=yes
+RestartApplications=no
 WizardStyle=modern
 
 [Tasks]
@@ -32,4 +33,7 @@ Name: "{group}\Marine Specials PDF"; Filename: "{app}\MarineSpecialsERP.exe"
 Name: "{userdesktop}\Marine Specials PDF"; Filename: "{app}\MarineSpecialsERP.exe"; Tasks: desktopicon
 
 [Run]
+; normal install: offer to start the app at the end
 Filename: "{app}\MarineSpecialsERP.exe"; Description: "Start Marine Specials PDF"; Flags: nowait postinstall skipifsilent
+; silent install = automatic update from inside the app: start the new version straight away
+Filename: "{app}\MarineSpecialsERP.exe"; Flags: nowait; Check: WizardSilent

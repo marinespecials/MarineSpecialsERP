@@ -1,10 +1,8 @@
 """Engine tests. Run: python -m pytest tests"""
-import io
 import os
 import sys
 import json
 import hashlib
-import zipfile
 import threading
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, HTTPServer
@@ -107,22 +105,22 @@ def test_send_without_drive_fails_safely(tmp_path):
 def test_updater_check_download_verify(tmp_path, monkeypatch):
     pkg = tmp_path / "srv"
     pkg.mkdir()
-    zbuf = io.BytesIO()
-    with zipfile.ZipFile(zbuf, "w") as z:
-        z.writestr("MarineSpecialsERP/MarineSpecialsERP.exe", b"MZ fake")
-        z.writestr("MarineSpecialsERP/.mserp-install", b"")
-    (pkg / updater.ASSET_NAME).write_bytes(zbuf.getvalue())
-    (pkg / (updater.ASSET_NAME + ".sha256")).write_text(hashlib.sha256(zbuf.getvalue()).hexdigest() + "  x\n")
+    setup = b"MZ" + b"fake installer" * 100
+    (pkg / updater.SETUP_NAME).write_bytes(setup)
+    (pkg / (updater.SETUP_NAME + ".sha256")).write_text(hashlib.sha256(setup).hexdigest() + "  x\n")
     srv = HTTPServer(("127.0.0.1", 0), partial(SimpleHTTPRequestHandler, directory=str(pkg)))
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     base = f"http://127.0.0.1:{srv.server_port}/"
     release = {"tag_name": "v3.1.0", "html_url": "x", "body": "", "assets": [
-        {"name": updater.ASSET_NAME, "browser_download_url": base + updater.ASSET_NAME},
-        {"name": updater.ASSET_NAME + ".sha256", "browser_download_url": base + updater.ASSET_NAME + ".sha256"}]}
+        {"name": updater.SETUP_NAME, "browser_download_url": base + updater.SETUP_NAME},
+        {"name": updater.SETUP_NAME + ".sha256", "browser_download_url": base + updater.SETUP_NAME + ".sha256"}]}
     real = net.request
     monkeypatch.setattr(net, "request", lambda url, **k: (200, json.dumps(release).encode()) if "api.github.com" in url else real(url, **k))
-    info = updater.check(current="3.0.0")
+    info = updater.check(current="3.0.1")
     assert info["version"] == "3.1.0" and updater.check(current="3.1.0") is None
-    _, src = updater.download_and_verify(info)
-    assert os.path.exists(os.path.join(src, "MarineSpecialsERP.exe"))
+    path = updater.download_and_verify(info)
+    assert open(path, "rb").read() == setup
+    (pkg / (updater.SETUP_NAME + ".sha256")).write_text("0" * 64)
+    with pytest.raises(RuntimeError, match="checksum"):
+        updater.download_and_verify(info)
     srv.shutdown()

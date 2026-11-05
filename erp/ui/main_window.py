@@ -115,12 +115,18 @@ class MainWindow(QMainWindow):
             if total:
                 common.on_main(lambda: dlg.setValue(int(done * 100 / total)))
 
-        def ready(res):
+        def ready(setup):
             dlg.close()
             if dlg.wasCanceled():
                 return
-            updater.install_and_restart(*res)
-            QApplication.instance().quit()
+            try:
+                updater.install_and_restart(setup)
+            except Exception as e:
+                QMessageBox.warning(self, "Update failed", f"Couldn't start the installer:\n{e}\n\n"
+                                    "Download it from the Releases page instead.")
+                return
+            self.statusBar().showMessage("Installing the update - the app will reopen in a moment…")
+            QTimer.singleShot(300, QApplication.instance().quit)
 
         def failed(e):
             dlg.close()
