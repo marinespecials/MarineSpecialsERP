@@ -1,7 +1,16 @@
+# Python
 __pycache__/
 *.pyc
+venv/
+.venv/
+env/
+.pytest_cache/
+# Build output
 build/
 dist/
-*.spec.bak
-.pytest_cache/
-.venv/
+# Old v1 tools (not needed in v2 - the build bundles its own)
+poppler/
+Tesseract-OCR/
+*.exe
+*.rar
+*.zip

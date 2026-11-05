@@ -1,7 +1,10 @@
 """Tesseract OCR (bundled with the app in the release build)."""
+import os
+import re
+
 from PIL import ImageOps
 
-from . import pdf, paths
+from . import paths
 
 try:
     import pytesseract
@@ -14,13 +17,11 @@ TESSERACT_CMD = paths.find_tesseract()
 TESSDATA = paths.tessdata_dir(TESSERACT_CMD)
 if pytesseract and TESSERACT_CMD:
     pytesseract.pytesseract.tesseract_cmd = TESSERACT_CMD
-
-
-def _config(extra=""):
-    cfg = extra
-    if TESSDATA:
-        cfg += f' --tessdata-dir "{TESSDATA}"'
-    return cfg.strip()
+if TESSDATA:
+    # Tell Tesseract where the bundled language files are via the environment.
+    # (Passing --tessdata-dir "path" breaks on Windows: pytesseract keeps the quote
+    # characters, so Tesseract looked for ...\tessdata"/ell.traineddata.)
+    os.environ["TESSDATA_PREFIX"] = TESSDATA
 
 
 def available():
@@ -30,31 +31,51 @@ def available():
 _lang_cache = {}
 
 
+def installed_languages():
+    if "all" not in _lang_cache:
+        try:
+            _lang_cache["all"] = set(pytesseract.get_languages(config=""))
+        except Exception:
+            _lang_cache["all"] = set()
+    return _lang_cache["all"]
+
+
 def languages(preferred="ell+eng"):
     if not available():
         return None
-    if preferred not in _lang_cache:
-        try:
-            installed = set(pytesseract.get_languages(config=_config()))
-        except Exception:
-            installed = {"eng"}
-        wanted = [l for l in preferred.split("+") if l in installed]
-        _lang_cache[preferred] = "+".join(wanted) if wanted else "eng"
-    return _lang_cache[preferred]
+    wanted = [l for l in preferred.split("+") if l in installed_languages()]
+    return "+".join(wanted) if wanted else "eng"
 
 
 def problems():
     if not available():
-        return ["Tesseract not found - scanned PDFs can't be read (digital PDFs and ΜΑΡΚ lookups still work)."]
-    if "ell" not in (languages() or ""):
+        return ["Tesseract not found - scanned pages can't be read (splitting still works)."]
+    langs = installed_languages()
+    if not langs:
+        return [f"Tesseract can't find its language files ({TESSDATA or 'tessdata'})."]
+    if "ell" not in langs:
         return ["Tesseract Greek language (ell) missing - Greek scans will read badly."]
     return []
 
 
-def ocr_page(path, index=0, lang="ell+eng"):
+def detect_rotation(img):
+    """Degrees to turn the page clockwise so the text is upright (0/90/180/270)."""
+    if not available() or "osd" not in installed_languages():
+        return 0
+    try:
+        osd = pytesseract.image_to_osd(img, config="--psm 0")
+    except Exception:
+        return 0   # too little text to tell
+    rot = re.search(r"Rotate:\s*(\d+)", osd)
+    conf = re.search(r"Orientation confidence:\s*([\d.]+)", osd)
+    if rot and conf and float(conf.group(1)) >= 1.5:
+        return int(rot.group(1)) % 360
+    return 0
+
+
+def ocr_image(img, lang="ell+eng"):
     if not available():
         raise RuntimeError("Tesseract is not available")
-    img = pdf.render(path, index, OCR_DPI, grayscale=True)
-    img = ImageOps.autocontrast(img)
+    img = ImageOps.autocontrast(img.convert("L"))
     # psm 4: single column of variable-size text - works well on invoices
-    return pytesseract.image_to_string(img, lang=languages(lang), config=_config("--psm 4"))
+    return pytesseract.image_to_string(img, lang=languages(lang), config="--psm 4")

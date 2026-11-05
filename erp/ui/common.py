@@ -1,4 +1,5 @@
 """Shared UI plumbing: background jobs, theme, small widgets."""
+import os
 import traceback
 
 from PySide6.QtCore import QObject, Signal, Slot, Qt, QThreadPool, QDate
@@ -135,6 +136,7 @@ QSS = """
 #cardValue { font-size: 18pt; font-weight: 700; }
 #cardSub { color: %(muted)s; font-size: 9pt; }
 #pageTitle { font-size: 16pt; font-weight: 700; }
+#sectionTitle { font-size: 11pt; font-weight: 700; padding: 2px 0 6px 0; }
 #muted { color: %(muted)s; }
 #banner { border-radius: 8px; padding: 8px 12px; font-weight: 600; }
 #updateBar { background: #FEF5E7; color: #7E5109; border-bottom: 1px solid #F5CBA7; }
@@ -202,3 +204,22 @@ def restyle(widget):
     """Re-apply QSS after changing a dynamic property like state=ok/warn."""
     widget.style().unpolish(widget)
     widget.style().polish(widget)
+
+
+# ------------------------------------------------------------------ files
+def open_path(path):
+    """Open a file or folder with the default Windows app."""
+    import subprocess
+    if os.name == "nt":
+        os.startfile(path)  # noqa: S606
+    else:
+        subprocess.Popen(["xdg-open", path])
+
+
+def reveal(path):
+    """Show a file selected in Explorer."""
+    import subprocess
+    if os.name == "nt":
+        subprocess.Popen(["explorer", "/select,", os.path.normpath(path)])
+    else:
+        open_path(os.path.dirname(path))

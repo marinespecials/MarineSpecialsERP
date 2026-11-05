@@ -8,7 +8,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from PySide6.QtGui import QIcon
 
 from .. import paths, DISPLAY_NAME, VERSION
-from ..db import Database
+from ..store import Store
 from . import common
 from .context import Context
 from .main_window import MainWindow
@@ -24,16 +24,24 @@ def _setup_logging():
     sys.excepthook = hook
 
 
-def first_run_import(db):
-    """If an old v1 supplier_rules.json sits next to the app, bring it in once."""
-    if db.get("v1_imported"):
+def migrate_v2(store):
+    """Keep the inbox folder and our ΑΦΜ from v2 settings (stored in erp.db)."""
+    if store.settings.get("_migrated_v2"):
         return
-    for folder in (paths.install_dir(), os.path.join(os.environ.get("APPDATA", ""), "MarineSpecialsERP")):
-        rules = os.path.join(folder, "supplier_rules.json")
-        if os.path.exists(rules):
-            db.import_legacy(rules_path=rules)
-            break
-    db.set("v1_imported", True)
+    db = os.path.join(store.folder, "erp.db")
+    if os.path.exists(db):
+        try:
+            import json
+            import sqlite3
+            con = sqlite3.connect(db)
+            rows = dict(con.execute("SELECT key, value FROM settings").fetchall())
+            con.close()
+            for key in ("input_folder", "own_vat_numbers", "ocr_languages", "theme"):
+                if key in rows and not store.settings.get(key):
+                    store.settings[key] = json.loads(rows[key])
+        except Exception:
+            pass
+    store.save_settings({"_migrated_v2": True})
 
 
 def build(argv=None):
@@ -44,9 +52,9 @@ def build(argv=None):
     if os.path.exists(icon):
         app.setWindowIcon(QIcon(icon))
     common.init_bridge()
-    db = Database(os.path.join(paths.data_dir(), "erp.db"))
-    first_run_import(db)
-    ctx = Context(db)
+    store = Store()
+    migrate_v2(store)
+    ctx = Context(store)
     common.apply_theme(app, ctx.settings.get("theme", "system"))
     win = MainWindow(ctx)
     return app, win, ctx

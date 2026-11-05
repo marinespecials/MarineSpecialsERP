@@ -5,11 +5,11 @@
 
 [Setup]
 AppId={{6C2B7E3A-5D4F-4E1B-9C8A-3F7D2E1A9B60}
-AppName=Marine Specials ERP
+AppName=Marine Specials PDF
 AppVersion={#AppVersion}
 AppPublisher=Marine Specials
 DefaultDirName={localappdata}\Programs\MarineSpecialsERP
-DefaultGroupName=Marine Specials ERP
+DefaultGroupName=Marine Specials PDF
 PrivilegesRequired=lowest
 DisableProgramGroupPage=yes
 OutputDir=..\dist
@@ -28,8 +28,8 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
 Source: "..\dist\MarineSpecialsERP\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 
 [Icons]
-Name: "{group}\Marine Specials ERP"; Filename: "{app}\MarineSpecialsERP.exe"
-Name: "{userdesktop}\Marine Specials ERP"; Filename: "{app}\MarineSpecialsERP.exe"; Tasks: desktopicon
+Name: "{group}\Marine Specials PDF"; Filename: "{app}\MarineSpecialsERP.exe"
+Name: "{userdesktop}\Marine Specials PDF"; Filename: "{app}\MarineSpecialsERP.exe"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\MarineSpecialsERP.exe"; Description: "Start Marine Specials ERP"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\MarineSpecialsERP.exe"; Description: "Start Marine Specials PDF"; Flags: nowait postinstall skipifsilent
