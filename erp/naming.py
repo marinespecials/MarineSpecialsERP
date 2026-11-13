@@ -43,9 +43,15 @@ def fmt_date(iso, fmt="%Y-%m-%d"):
         return ""
 
 
+def clean_supplier(s):
+    """A company name as typed by the user, made file-name friendly (spaces -> _ like v1)."""
+    s = safe_name(s or "")
+    return re.sub(r"\s+", "_", s).strip("_")
+
+
 def values(fields, names, original, n, date_format="%Y-%m-%d"):
     vat = fields.get("vat", "")
-    supplier = names.get(vat) if vat else None
+    supplier = fields.get("supplier_override") or (names.get(vat) if vat else None)
     return {
         "supplier": supplier or _clean_company(fields.get("company", "")),
         "invoice": re.sub(r"\s+", "", fields.get("invoice", "")).replace("/", "-"),
@@ -76,6 +82,43 @@ def render(template, vals):
     return f"{lead}{body}{trail}" if body else ""
 
 
+def apply_overrides(fields, overrides):
+    """What the user typed in the Company / Invoice # / Date boxes beats what was read from the page."""
+    f = dict(fields)
+    o = overrides or {}
+    if "supplier" in o:
+        f["supplier_override"] = clean_supplier(o["supplier"])
+    if "invoice" in o:
+        f["invoice"] = o["invoice"]
+    if "date" in o:
+        f["date"] = o["date"]
+    return f
+
+
+def build(fields, names, original, n, template=DEFAULT_TEMPLATE, date_format="%Y-%m-%d", overrides=None):
+    """Final file name (without .pdf) from page fields + the user's edits."""
+    o = overrides or {}
+    if o.get("custom"):
+        return safe_name(strip_pdf(o["custom"]))
+    return suggest(apply_overrides(fields, o), names, original, n, template, date_format)
+
+
+def parse_filename(name):
+    """Read an old-layout name "COMPANY_INVOICE_DATE.pdf" back into its parts (for renaming)."""
+    stem = strip_pdf(os.path.basename(name or ""))
+    m = re.match(r"^(?P<s>.+?)_(?P<i>[^_]+)_(?P<d>\d{4}-\d{2}-\d{2}|\d{2}[-.]\d{2}[-.]\d{4}|\d{8})$", stem)
+    if not m:
+        return {}
+    d = m.group("d")
+    for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d.%m.%Y", "%Y%m%d"):
+        try:
+            iso = datetime.datetime.strptime(d, fmt).date().isoformat()
+            break
+        except ValueError:
+            iso = ""
+    return {"supplier": m.group("s"), "invoice": m.group("i"), "date": iso}
+
+
 def suggest(fields, names, original, n, template=DEFAULT_TEMPLATE, date_format="%Y-%m-%d"):
     vals = values(fields, names, original, n, date_format)
     name = safe_name(render(template, vals))
@@ -94,6 +137,16 @@ def subfolder(template, fields, names, original, n, date_format="%Y-%m-%d"):
     vals = values(fields, names, original, n, date_format)
     parts = [safe_name(render(p, vals)) for p in re.split(r"[\\/]", template)]
     return os.path.join(*[p for p in parts if p]) if any(parts) else ""
+
+
+def remember(fields, typed_supplier, names, own_vats=()):
+    """The user typed a company name: remember it for this ΑΦΜ next time."""
+    vat = fields.get("vat")
+    name = clean_supplier(typed_supplier)
+    if vat and vat not in own_vats and name and re.search(r"[^\W\d_]", name) and names.get(vat) != name:
+        names[vat] = name
+        return True
+    return False
 
 
 def learn(final_name, fields, names, template=DEFAULT_TEMPLATE):

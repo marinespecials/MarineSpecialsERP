@@ -124,3 +124,14 @@ def test_updater_check_download_verify(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="checksum"):
         updater.download_and_verify(info)
     srv.shutdown()
+
+
+def test_old_layout_fields():
+    f = {"vat": "094123456", "invoice": "4587", "date": "2026-09-03", "company": "Ισχύς Α.Ε."}
+    assert naming.build(f, {}, "Scan1.pdf", 1, overrides={"supplier": "ΙΣΧΥΣ ΑΕ", "date": "2026-09-04"}) == "ΙΣΧΥΣ_ΑΕ_4587_2026-09-04"
+    assert naming.build(f, {}, "Scan1.pdf", 1, overrides={"custom": "Free name.pdf"}) == "Free name"
+    assert naming.parse_filename("ΙΣΧΥΣ_ΑΕ_4587_2026-09-03.pdf") == {"supplier": "ΙΣΧΥΣ_ΑΕ", "invoice": "4587", "date": "2026-09-03"}
+    assert naming.parse_filename("Scan1.pdf") == {}
+    names = {}
+    assert naming.remember(f, "ΙΣΧΥΣ ΑΕ", names) and names == {"094123456": "ΙΣΧΥΣ_ΑΕ"}
+    assert not naming.remember({"vat": "800555111"}, "US", names, own_vats={"800555111"})

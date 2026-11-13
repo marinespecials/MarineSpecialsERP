@@ -5,15 +5,16 @@ import shutil
 import threading
 
 from PIL import Image, ImageDraw, ImageQt
-from PySide6.QtCore import Qt, QTimer, QFileSystemWatcher, QSize
+from PySide6.QtCore import Qt, QTimer, QFileSystemWatcher, QSize, Signal
 from PySide6.QtGui import QPixmap, QIcon, QShortcut, QKeySequence, QAction
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QListWidget, QListWidgetItem, QSplitter, QLineEdit,
-    QFileDialog, QMessageBox, QScrollArea, QFrame, QAbstractItemView, QMenu, QInputDialog, QSlider, QDialog)
+    QFileDialog, QMessageBox, QScrollArea, QFrame, QAbstractItemView, QMenu, QSlider, QDialog, QComboBox,
+    QFormLayout, QCompleter, QDialogButtonBox)
 
 from .. import pdf, analyze, naming, sender
 from . import common
-from .common import RED
+from .common import RED, DateField
 
 DOC_COLORS = ["#1D7FA6", "#D68910", "#1E8449", "#8E44AD", "#C0392B", "#16A085", "#B7950B", "#2E4053"]
 
@@ -31,7 +32,7 @@ class FileState:
                       for i in range(n_pages)]
         self.infos = [None] * n_pages
         self.thumbs = [None] * n_pages
-        self.names = {}            # first page index of a document -> name typed by the user
+        self.edits = {}            # first page index of a document -> {"supplier"/"invoice"/"date"/"custom": typed}
         self.user_cut = False      # user changed the cuts -> don't overwrite with smart split
         self.smart_applied = False
 
@@ -55,6 +56,146 @@ class FileState:
             if any(p["index"] == index for p in d["pages"]):
                 return d
         return None
+
+
+class NameFields(QWidget):
+    """The v1 layout: Company / Invoice # / Date boxes that build the file name.
+    "✎ Type full name" switches to one free-text box for anything else."""
+    edited = Signal()
+    submitted = Signal()
+
+    def __init__(self, companies=()):
+        super().__init__()
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
+        self.form_host = QWidget()
+        form = QFormLayout(self.form_host)
+        form.setContentsMargins(0, 0, 0, 0)
+        form.setVerticalSpacing(4)
+        self.company = QComboBox(editable=True)
+        self.company.setInsertPolicy(QComboBox.NoInsert)
+        self.company.addItems(sorted(set(companies), key=str.lower))
+        self.company.completer().setCompletionMode(QCompleter.PopupCompletion)
+        self.company.completer().setFilterMode(Qt.MatchContains)
+        self.company.lineEdit().setPlaceholderText("company name")
+        self.invoice = QLineEdit(placeholderText="invoice number")
+        self.date = DateField()
+        form.addRow("Company", self.company)
+        form.addRow("Invoice #", self.invoice)
+        form.addRow("Date", self.date)
+        lay.addWidget(self.form_host)
+        self.custom = QLineEdit(placeholderText="type the whole file name")
+        self.custom.hide()
+        lay.addWidget(self.custom)
+        self.preview = QLabel(objectName="muted", wordWrap=True)
+        self.preview.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        lay.addWidget(self.preview)
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        small = "QPushButton { padding: 2px 8px; font-size: 9pt; }"
+        self.mode_btn = QPushButton("✎ Type full name")
+        self.mode_btn.setStyleSheet(small)
+        self.mode_btn.clicked.connect(self.toggle_mode)
+        row.addWidget(self.mode_btn)
+        self.reset_btn = QPushButton("Reset")
+        self.reset_btn.setToolTip("Back to what was read from the page")
+        self.reset_btn.setStyleSheet(small)
+        row.addWidget(self.reset_btn)
+        row.addStretch()
+        lay.addLayout(row)
+        self.user = {}     # fields the user typed in
+        self._last_name = ""
+        self.company.lineEdit().textEdited.connect(lambda t: self._typed("supplier", t))
+        self.company.activated.connect(lambda _: self._typed("supplier", self.company.currentText()))
+        self.invoice.textEdited.connect(lambda t: self._typed("invoice", t))
+        self.date.dateChanged.connect(lambda _: self._typed("date", self.date.iso()))
+        self.custom.textEdited.connect(lambda t: self._typed("custom", t))
+        for w in (self.company.lineEdit(), self.invoice, self.custom):
+            w.returnPressed.connect(self.submitted.emit)
+
+    def _typed(self, key, value):
+        self.user[key] = value
+        self.edited.emit()
+
+    def toggle_mode(self):
+        custom = not self.custom.isVisible()
+        self.custom.setVisible(custom)
+        self.form_host.setVisible(not custom)
+        self.mode_btn.setText("▦ Use the boxes" if custom else "✎ Type full name")
+        if custom:
+            self.custom.setText(self._last_name)
+            self.user["custom"] = self._last_name
+            self.custom.setFocus()
+        else:
+            self.user.pop("custom", None)
+        self.edited.emit()
+
+    def fill(self, suggested, edits, name):
+        """Show suggestions in every box the user hasn't typed in (and isn't typing in now)."""
+        self.user = dict(edits)
+        vals = {**suggested, **{k: v for k, v in edits.items() if k != "custom"}}
+        for key, widget, setter in (("supplier", self.company.lineEdit(), lambda v: self.company.setEditText(v)),
+                                    ("invoice", self.invoice, self.invoice.setText)):
+            if not widget.hasFocus():
+                widget.blockSignals(True)
+                setter(vals.get(key, ""))
+                widget.blockSignals(False)
+        if not self.date.hasFocus():
+            self.date.blockSignals(True)
+            self.date.set_iso(vals.get("date", ""))
+            self.date.blockSignals(False)
+        is_custom = "custom" in edits
+        if is_custom != self.custom.isVisible():
+            self.custom.setVisible(is_custom)
+            self.form_host.setVisible(not is_custom)
+            self.mode_btn.setText("▦ Use the boxes" if is_custom else "✎ Type full name")
+        if is_custom and not self.custom.hasFocus():
+            self.custom.setText(edits["custom"])
+        self._last_name = name
+        self.preview.setText(f"📄 <b>{name}.pdf</b>" if name else "📄 —")
+        self.reset_btn.setVisible(bool(edits))
+
+
+class RenameDialog(QDialog):
+    """F2 on a file in the list: rename it with the same Company / Invoice # / Date boxes."""
+
+    def __init__(self, parent, path, fields, names, settings):
+        super().__init__(parent)
+        self.setWindowTitle("Rename")
+        self.setMinimumWidth(460)
+        self.path, self.fields, self.names, self.settings = path, fields, names, settings
+        lay = QVBoxLayout(self)
+        lay.addWidget(QLabel(f"<b>{os.path.basename(path)}</b>"))
+        self.nf = NameFields(names.values())
+        lay.addWidget(self.nf)
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.button(QDialogButtonBox.Ok).setText("Rename")
+        bb.accepted.connect(self.accept)
+        bb.rejected.connect(self.reject)
+        lay.addWidget(bb)
+        self.edits = {}
+        # start from the current name if it already follows Company_Invoice_Date
+        old = naming.parse_filename(path)
+        if old:
+            self.edits = old
+        self.nf.edited.connect(self.update)
+        self.nf.submitted.connect(self.accept)
+        self.nf.reset_btn.clicked.connect(lambda: (self.edits.clear(), self.update(reset=True)))
+        self.update(reset=True)
+
+    def suggested(self):
+        v = naming.values(self.fields, self.names, os.path.basename(self.path), 1, "%Y-%m-%d")
+        return {"supplier": v["supplier"], "invoice": v["invoice"], "date": self.fields.get("date", "")}
+
+    def name(self):
+        return naming.build(self.fields, self.names, os.path.basename(self.path), 1,
+                            self.settings.get("name_template"), self.settings.get("date_format", "%Y-%m-%d"), self.edits)
+
+    def update(self, reset=False):
+        if not reset:
+            self.edits = dict(self.nf.user)
+        self.nf.fill(self.suggested(), self.edits, self.name())
 
 
 class PreviewDialog(QDialog):
@@ -187,6 +328,7 @@ class WorkPage(QWidget):
         self.docs_area = QScrollArea()
         self.docs_area.setWidgetResizable(True)
         self.docs_area.setFrameShape(QFrame.NoFrame)
+        self.docs_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.docs_host = QWidget()
         self.docs_lay = QVBoxLayout(self.docs_host)
         self.docs_lay.setContentsMargins(0, 0, 0, 0)
@@ -202,7 +344,7 @@ class WorkPage(QWidget):
         self.btn_local.clicked.connect(lambda: self.send(to_inbox=True))
         rl.addWidget(self.btn_local)
         split.addWidget(right)
-        split.setSizes([240, 760, 380])
+        split.setSizes([220, 720, 420])
 
         QShortcut(QKeySequence("S"), self.grid, self.toggle_cut)
         QShortcut(QKeySequence("R"), self.grid, lambda: self.rotate(90))
@@ -298,9 +440,18 @@ class WorkPage(QWidget):
         if not path:
             return
         old = os.path.basename(path)
-        new, ok = QInputDialog.getText(self, "Rename", "New name:", text=naming.strip_pdf(old))
-        new = naming.safe_name(naming.strip_pdf(new or ""))
-        if not ok or not new or new + ".pdf" == old:
+        st = self.states.get(path)
+        fields = {}
+        if st and st.documents():
+            fields = self.doc_fields(st, st.documents()[0])
+        dlg = RenameDialog(self, path, fields, self.ctx.store.names, self.ctx.settings)
+        if not dlg.exec():
+            return
+        new = naming.safe_name(dlg.name())
+        if dlg.edits.get("supplier") and naming.remember(fields, dlg.edits["supplier"], self.ctx.store.names,
+                                                         set(self.ctx.settings.get("own_vat_numbers") or [])):
+            self.ctx.store.save_names()
+        if not new or new + ".pdf" == old:
             return
         target = os.path.join(os.path.dirname(path), new + ".pdf")
         if os.path.exists(target):
@@ -605,11 +756,16 @@ class WorkPage(QWidget):
         f = analyze.merge_fields(infos)
         return f
 
-    def suggested(self, st, doc, fields):
+    def suggested_values(self, st, doc, fields):
+        v = naming.values(fields, self.ctx.store.names, os.path.basename(st.path), doc["n"], "%Y-%m-%d")
+        return {"supplier": v["supplier"], "invoice": v["invoice"], "date": fields.get("date", "")}
+
+    def final_name(self, st, doc, fields, edits=None):
         s = self.ctx.settings
         f = dict(fields, _multi=len(st.documents()) > 1)
-        return naming.suggest(f, self.ctx.store.names, os.path.basename(st.path), doc["n"],
-                              s.get("name_template"), s.get("date_format", "%Y-%m-%d"))
+        return naming.build(f, self.ctx.store.names, os.path.basename(st.path), doc["n"],
+                            s.get("name_template"), s.get("date_format", "%Y-%m-%d"),
+                            st.edits.get(doc["key"]) if edits is None else edits)
 
     def refresh_docs(self):
         st = self.states.get(self.current)
@@ -652,24 +808,33 @@ class WorkPage(QWidget):
         lay.setContentsMargins(12, 8, 10, 10)
         card.head = QLabel()
         lay.addWidget(card.head)
-        row = QHBoxLayout()
-        card.edit = QLineEdit(placeholderText="file name")
+        card.nf = NameFields(self.ctx.store.names.values())
         key = doc["key"]
-        card.edit.textEdited.connect(lambda text, k=key: (st.names.__setitem__(k, text), card.reset.show()))
-        card.edit.returnPressed.connect(lambda: self.send(False))
-        row.addWidget(card.edit, 1)
-        row.addWidget(QLabel(".pdf", objectName="muted"))
-        card.reset = QPushButton("↺")
-        card.reset.setToolTip("Back to the suggested name")
-        card.reset.setFixedWidth(30)
-        card.reset.clicked.connect(lambda _=False, k=key: (st.names.pop(k, None), card.reset.hide(), self.refresh_docs()))
-        row.addWidget(card.reset)
-        lay.addLayout(row)
+
+        def typed():
+            st.edits[key] = dict(card.nf.user)
+            self.fill_card(st, self.doc_by_key(st, key), card, any(i is None for i in st.infos))
+
+        def reset():
+            st.edits.pop(key, None)
+            card.nf.user = {}
+            self.fill_card(st, self.doc_by_key(st, key), card, any(i is None for i in st.infos))
+
+        card.nf.edited.connect(typed)
+        card.nf.submitted.connect(lambda: self.send(False))
+        card.nf.reset_btn.clicked.connect(reset)
+        lay.addWidget(card.nf)
         card.info = QLabel(objectName="muted", wordWrap=True)
         lay.addWidget(card.info)
         return card
 
+    @staticmethod
+    def doc_by_key(st, key):
+        return next((d for d in st.documents() if d["key"] == key), None)
+
     def fill_card(self, st, doc, card, reading):
+        if doc is None:
+            return
         pages = [p["index"] + 1 for p in doc["pages"]]
         if len(pages) == 1:
             rng = f"page {pages[0]}"
@@ -679,26 +844,22 @@ class WorkPage(QWidget):
             rng = "pages " + ", ".join(map(str, pages))
         card.head.setText(f"<b>Document {doc['n']}</b> · {rng}")
         fields = self.doc_fields(st, doc)
-        typed = st.names.get(doc["key"])
-        card.reset.setVisible(typed is not None)
-        if typed is None and not card.edit.hasFocus():
-            card.edit.setText(self.suggested(st, doc, fields))
-        elif typed is not None and card.edit.text() != typed and not card.edit.hasFocus():
-            card.edit.setText(typed)
-        bits = [x for x in (fields.get("vat") and f"ΑΦΜ {fields['vat']}", fields.get("invoice") and f"No {fields['invoice']}",
-                            fields.get("date") and naming.fmt_date(fields["date"], "%d/%m/%Y"),
-                            fields.get("mark") and f"ΜΑΡΚ {fields['mark']}") if x]
+        edits = st.edits.get(doc["key"], {})
+        card.nf.fill(self.suggested_values(st, doc, fields), edits, self.final_name(st, doc, fields, edits))
+        bits = [x for x in (fields.get("vat") and f"ΑΦΜ {fields['vat']}", fields.get("mark") and f"ΜΑΡΚ {fields['mark']}") if x]
         card.info.setText(("⏳ reading…  " if reading else "") +
-                          (" · ".join(bits) if bits else ("" if reading else "Nothing recognised - type a name")))
+                          (" · ".join(bits) if bits else ("" if reading else
+                           ("" if fields.get("invoice") or fields.get("date") else "Nothing recognised - fill in the boxes"))))
 
     def collect_parts(self):
         st = self.states.get(self.current)
         parts = []
         for doc in st.documents():
             fields = self.doc_fields(st, doc)
-            name = st.names.get(doc["key"]) or self.suggested(st, doc, fields)
-            parts.append({"name": name, "pages": [(p["index"], p["rot"]) for p in doc["pages"]], "fields": fields,
-                          "suggested": self.suggested(st, doc, fields)})
+            edits = st.edits.get(doc["key"], {})
+            parts.append({"name": self.final_name(st, doc, fields, edits),
+                          "pages": [(p["index"], p["rot"]) for p in doc["pages"]],
+                          "fields": naming.apply_overrides(fields, edits), "read": fields, "edits": edits})
         return st, parts
 
     # ================================================================ send
@@ -710,7 +871,7 @@ class WorkPage(QWidget):
             QMessageBox.information(self, "Drive folder", "Choose your Google Drive folder first.")
             self.pick_folder("drive_folder", "Google Drive folder")
             return
-        if any(i is None for i in st.infos) and not any(st.names.values()):
+        if any(i is None for i in st.infos) and not any(st.edits.values()):
             if QMessageBox.question(self, "Still reading", "Some pages are still being read, so names may be incomplete.\n\nSend anyway?") != QMessageBox.Yes:
                 return
         st, parts = self.collect_parts()
@@ -726,10 +887,10 @@ class WorkPage(QWidget):
             QMessageBox.warning(self, "Couldn't send", str(e))
             return
         learned = False
+        own = set(self.ctx.settings.get("own_vat_numbers") or [])
         for part in parts:
-            if naming.strip_pdf(part["name"]) != part["suggested"]:
-                learned |= naming.learn(part["name"], part["fields"], self.ctx.store.names,
-                                        self.ctx.settings.get("name_template"))
+            if part["edits"].get("supplier"):
+                learned |= naming.remember(part["read"], part["edits"]["supplier"], self.ctx.store.names, own)
         if learned:
             self.ctx.store.save_names()
         where = "the inbox" if to_inbox else "Drive"

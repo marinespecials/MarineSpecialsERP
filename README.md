@@ -12,7 +12,10 @@ file from its contents and saves it to Google Drive.**
   Correct a supplier name once and it's remembered by ΑΦΜ.
 - **Sends to Google Drive:** files go into your Drive for desktop folder, optionally into `{year}` / `{month}`
   subfolders. The original scan moves to `Inbox\_done`.
-- **Rename anything:** press **F2** on a file in the list. The app never keeps files locked.
+- **Name boxes like v1:** each document has **Company**, **Invoice #** and **Date** boxes, filled in from the page.
+  The file name (`COMPANY_INVOICE_DATE.pdf`) updates as you type. *✎ Type full name* lets you write any name.
+- **Rename anything:** press **F2** on a file in the list to rename it with the same three boxes. The app never keeps
+  files locked.
 - **Keeps a history** of everything it saved, with Open / Show in folder.
 - **Updates itself** from GitHub Releases.
 
